@@ -68,7 +68,12 @@ if extract_btn:
                     st.markdown("---")
                     
                     # Generate answers using Bedrock
-                    bedrock = boto3.client('bedrock-runtime', region_name='eu-north-1')
+                    bedrock = boto3.client(
+                        'bedrock-runtime',
+                        region_name=st.secrets.get("AWS_DEFAULT_REGION", "eu-north-1"),
+                        aws_access_key_id=st.secrets.get("AWS_ACCESS_KEY_ID"),
+                        aws_secret_access_key=st.secrets.get("AWS_SECRET_ACCESS_KEY")
+                    )
                     
                     for i, q in enumerate(questions, 1):
                         with st.container():
