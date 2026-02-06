@@ -17,6 +17,10 @@ with col2:
     st.write("")
     extract_btn = st.button("🚀 Extract & Answer", type="primary", use_container_width=True)
 
+# Email input for form submission
+user_email = st.text_input("Your Email (for form submission):", placeholder="your.email@example.com")
+submit_form = st.checkbox("📤 Submit form automatically after generating answers")
+
 if extract_btn:
     if not form_url:
         st.error("❌ Please provide a form URL")
@@ -26,14 +30,26 @@ if extract_btn:
                 response = requests.get(form_url)
                 soup = BeautifulSoup(response.text, 'html.parser')
                 
+                # Extract form action URL and entry IDs
+                form_element = soup.find('form')
+                form_action = form_element.get('action') if form_element else None
+                
                 # Extract questions
                 questions = []
+                form_data = {}
                 
                 # Try method 1: role-based extraction
                 for item in soup.find_all('div', {'role': 'listitem'}):
                     question_text = item.find('div', {'role': 'heading'})
                     if question_text:
-                        q = {"question": question_text.get_text(strip=True), "options": []}
+                        q = {"question": question_text.get_text(strip=True), "options": [], "entry_id": None}
+                        
+                        # Extract entry ID from input name
+                        input_elem = item.find('input', {'name': True})
+                        if input_elem:
+                            entry_name = input_elem.get('name')
+                            if entry_name and 'entry.' in entry_name:
+                                q["entry_id"] = entry_name.split('_')[0]
                         
                         # Extract options
                         options = item.find_all('div', {'role': 'radio'}) or item.find_all('div', {'role': 'checkbox'})
@@ -51,7 +67,14 @@ if extract_btn:
                     for item in soup.find_all('div', class_='Qr7Oae'):
                         question_elem = item.find('span', class_='M7eMe')
                         if question_elem:
-                            q = {"question": question_elem.get_text(strip=True), "options": []}
+                            q = {"question": question_elem.get_text(strip=True), "options": [], "entry_id": None}
+                            
+                            # Extract entry ID from input name
+                            input_elem = item.find('input', {'name': True})
+                            if input_elem:
+                                entry_name = input_elem.get('name')
+                                if entry_name and 'entry.' in entry_name:
+                                    q["entry_id"] = entry_name.split('_')[0]
                             
                             # Extract radio/checkbox options
                             for opt in item.find_all('span', class_='aDTYNe'):
@@ -113,6 +136,10 @@ if extract_btn:
                                     else:
                                         st.write(f"⚪ {opt}")
                                 
+                                # Store answer for form submission
+                                if selected_idx != -1 and q.get('entry_id'):
+                                    form_data[q['entry_id']] = q['options'][selected_idx]
+                                
                                 if selected_idx == -1:
                                     st.warning(f"⚠️ Could not match LLM response to any option")
                             else:
@@ -135,6 +162,27 @@ if extract_btn:
                                 st.info(f"💡 **Answer:** {answer}")
                             
                             st.markdown("---")
+                    
+                    # Submit form if requested
+                    if submit_form and form_action and form_data:
+                        st.markdown("### 📤 Form Submission")
+                        
+                        if not user_email:
+                            st.error("❌ Please provide your email to submit the form")
+                        else:
+                            # Add email to form data
+                            form_data['emailAddress'] = user_email
+                            
+                            try:
+                                submit_response = requests.post(form_action, data=form_data)
+                                if submit_response.status_code == 200:
+                                    st.success("✅ Form submitted successfully!")
+                                else:
+                                    st.error(f"❌ Form submission failed with status code: {submit_response.status_code}")
+                            except Exception as submit_error:
+                                st.error(f"❌ Form submission error: {str(submit_error)}")
+                    elif submit_form and not form_action:
+                        st.warning("⚠️ Could not extract form submission URL")
                         
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
