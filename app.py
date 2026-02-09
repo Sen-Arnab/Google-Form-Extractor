@@ -250,13 +250,24 @@ if extract_btn:
                                         if opt_text and opt_text != 'Choose':
                                             q["options"].append(opt_text)
                             
-                            # For radio/checkbox, use span extraction
+                            # For radio/checkbox, try span extraction first
                             else:
                                 option_spans = item.find_all('span', class_='aDTYNe')
                                 for opt_span in option_spans:
                                     opt_text = opt_span.get_text(strip=True)
                                     if opt_text:
                                         q["options"].append(opt_text)
+                                
+                                # If no options found, try data-value from radio/checkbox elements
+                                if not q["options"]:
+                                    role = 'radio' if q_type == 'radio' else 'checkbox'
+                                    elements = item.find_all('div', {'role': role, 'data-value': True})
+                                    seen = set()
+                                    for elem in elements:
+                                        val = elem.get('data-value')
+                                        if val and val not in seen:
+                                            seen.add(val)
+                                            q["options"].append(val)
                         
                         # If no options found but it's a choice type, treat as text
                         if q_type in ['radio', 'checkbox', 'dropdown'] and not q["options"]:
