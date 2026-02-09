@@ -241,12 +241,26 @@ if extract_btn:
                         
                         # Extract options only for choice-based questions
                         if q_type in ['radio', 'checkbox', 'dropdown']:
-                            # Find option text in span elements
-                            option_spans = item.find_all('span', class_='aDTYNe')
-                            for opt_span in option_spans:
-                                opt_text = opt_span.get_text(strip=True)
-                                if opt_text:
-                                    q["options"].append(opt_text)
+                            # For dropdown, extract from listbox
+                            if q_type == 'dropdown':
+                                listbox = item.find('div', {'role': 'listbox'})
+                                if listbox:
+                                    for opt in listbox.find_all('span', class_='vRMGwf'):
+                                        opt_text = opt.get_text(strip=True)
+                                        if opt_text and opt_text != 'Choose':
+                                            q["options"].append(opt_text)
+                            
+                            # For radio/checkbox, use span extraction
+                            else:
+                                option_spans = item.find_all('span', class_='aDTYNe')
+                                for opt_span in option_spans:
+                                    opt_text = opt_span.get_text(strip=True)
+                                    if opt_text:
+                                        q["options"].append(opt_text)
+                        
+                        # If no options found but it's a choice type, treat as text
+                        if q_type in ['radio', 'checkbox', 'dropdown'] and not q["options"]:
+                            q["type"] = 'text'
                         
                         questions.append(q)
                 
@@ -310,6 +324,7 @@ if extract_btn:
                             if q['options'] and q['type'] in ['radio', 'dropdown']:
                                 # Single choice question - return number
                                 options_list = '\n'.join([f"{i+1}. {opt}" for i, opt in enumerate(q['options'])])
+                                
                                 prompt = f"""Pick the most likely answer. If you don't know, guess.
 
 Question: {q['question']}
