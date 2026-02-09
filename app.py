@@ -307,12 +307,18 @@ if extract_btn:
                             
                             if q['options']:
                                 # Multiple choice question
-                                prompt = f"Question: {q['question']}\nOptions: {', '.join(q['options'])}\n\nRespond with ONLY the best option text from the list above, nothing else."
-                                prompt = f"Question: {q['question']}\nOptions: {', '.join(q['options'])}\n\nRespond with ONLY the best option text from the list above, nothing else."
+                                options_list = '\n'.join([f"- {opt}" for opt in q['options']])
+                                prompt = f"""Question: {q['question']}
+
+Available options:
+{options_list}
+
+Instructions: Reply with ONLY the exact text of the single best option from the list above. Do not add any explanation, reasoning, or extra text. Just the option text itself."""
                                 
                                 body = json.dumps({
                                     "anthropic_version": "bedrock-2023-05-31",
-                                    "max_tokens": 200,
+                                    "max_tokens": 50,
+                                    "temperature": 0,
                                     "messages": [{"role": "user", "content": prompt}]
                                 })
                                 
