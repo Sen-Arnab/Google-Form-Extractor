@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 import boto3
 import json
+import re
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
@@ -240,9 +241,10 @@ if extract_btn:
                         
                         # Extract options only for choice-based questions
                         if q_type in ['radio', 'checkbox', 'dropdown']:
-                            options = item.find_all('div', {'role': 'radio'}) or item.find_all('div', {'role': 'checkbox'})
-                            for opt in options:
-                                opt_text = opt.get_text(strip=True)
+                            # Find option text in span elements
+                            option_spans = item.find_all('span', class_='aDTYNe')
+                            for opt_span in option_spans:
+                                opt_text = opt_span.get_text(strip=True)
                                 if opt_text:
                                     q["options"].append(opt_text)
                         
@@ -264,11 +266,11 @@ if extract_btn:
                                     q["entry_id"] = entry_name.split('_')[0] if '_' in entry_name else entry_name
                             
                             # Extract radio/checkbox options
-                            if q_type in ['radio', 'checkbox', 'dropdown']:
-                                for opt in item.find_all('span', class_='aDTYNe'):
-                                    opt_text = opt.get_text(strip=True)
-                                    if opt_text:
-                                        q["options"].append(opt_text)
+                            option_spans = item.find_all('span', class_='aDTYNe')
+                            for opt_span in option_spans:
+                                opt_text = opt_span.get_text(strip=True)
+                                if opt_text:
+                                    q["options"].append(opt_text)
                             
                             questions.append(q)
                 
@@ -305,20 +307,23 @@ if extract_btn:
                             }
                             st.caption(f"{type_emoji.get(q['type'], '❓')} Type: {q['type'].title()}")
                             
-                            if q['options']:
-                                # Multiple choice question
-                                options_list = '\n'.join([f"- {opt}" for opt in q['options']])
-                                prompt = f"""Question: {q['question']}
+                            if q['options'] and q['type'] in ['radio', 'dropdown']:
+                                # Single choice question - return number
+                                options_list = '\n'.join([f"{i+1}. {opt}" for i, opt in enumerate(q['options'])])
+                                prompt = f"""Pick the most likely answer. If you don't know, guess.
 
-Available options:
+Question: {q['question']}
+
+Options:
 {options_list}
 
-Instructions: Reply with ONLY the exact text of the single best option from the list above. Do not add any explanation, reasoning, or extra text. Just the option text itself."""
+Your answer (just the number):"""
                                 
                                 body = json.dumps({
                                     "anthropic_version": "bedrock-2023-05-31",
-                                    "max_tokens": 50,
-                                    "temperature": 0,
+                                    "max_tokens": 3,
+                                    "temperature": 0.3,
+                                    "system": "You must always pick one option number. If unsure, make your best guess. Respond only with the number.",
                                     "messages": [{"role": "user", "content": prompt}]
                                 })
                                 
@@ -335,12 +340,18 @@ Instructions: Reply with ONLY the exact text of the single best option from the 
                                 result = json.loads(response['body'].read())
                                 answer = result['content'][0]['text'].strip()
                                 
-                                # Find best matching option
+                                # Parse the number from response
                                 selected_idx = -1
-                                for idx, opt in enumerate(q['options']):
-                                    if opt.lower() in answer.lower() or answer.lower() in opt.lower():
-                                        selected_idx = idx
-                                        break
+                                try:
+                                    # Extract first number from response
+                                    import re
+                                    match = re.search(r'\d+', answer)
+                                    if match:
+                                        choice_num = int(match.group())
+                                        if 1 <= choice_num <= len(q['options']):
+                                            selected_idx = choice_num - 1
+                                except:
+                                    pass
                                 
                                 # Display options with tick for selected answer
                                 st.markdown("**Options:**")
@@ -350,20 +361,91 @@ Instructions: Reply with ONLY the exact text of the single best option from the 
                                     else:
                                         st.write(f"⚪ {opt}")
                                 
-                                # Store answer for form submission
-                                if selected_idx != -1 and q.get('entry_id'):
-                                    form_data[q['entry_id']] = q['options'][selected_idx]
-                                
+                                # Show what LLM returned for debugging
                                 if selected_idx == -1:
-                                    st.warning(f"⚠️ Could not match LLM response to any option")
-                            else:
-                                # Text/open-ended question
-                                prompt_type = "a brief, direct answer" if q['type'] == 'text' else "an appropriate value"
-                                prompt = f"Question: {q['question']}\n\nProvide {prompt_type}."
+                                    st.warning(f"⚠️ Could not parse LLM response: '{answer}'")
+                                else:
+                                    # Store answer for form submission
+                                    if q.get('entry_id'):
+                                        form_data[q['entry_id']] = q['options'][selected_idx]
+                            
+                            elif q['options'] and q['type'] == 'checkbox':
+                                # Multiple choice (checkbox) - can select multiple
+                                options_list = '\n'.join([f"{i+1}. {opt}" for i, opt in enumerate(q['options'])])
+                                prompt = f"""Select all applicable answers for this question. You can pick multiple.
+
+Question: {q['question']}
+
+Options:
+{options_list}
+
+Reply with comma-separated numbers (e.g., "1,3" or "2,4,5"). If only one applies, just that number."""
                                 
                                 body = json.dumps({
                                     "anthropic_version": "bedrock-2023-05-31",
-                                    "max_tokens": 200,
+                                    "max_tokens": 20,
+                                    "temperature": 0.3,
+                                    "system": "Respond only with comma-separated numbers of applicable options.",
+                                    "messages": [{"role": "user", "content": prompt}]
+                                })
+                                
+                                with st.spinner("🤖 AI is thinking..."):
+                                    try:
+                                        response = bedrock.invoke_model(
+                                            modelId="eu.anthropic.claude-sonnet-4-20250514-v1:0",
+                                            body=body
+                                        )
+                                    except Exception as e:
+                                        st.error(f"❌ Bedrock API error: {str(e)}")
+                                        continue
+                                
+                                result = json.loads(response['body'].read())
+                                answer = result['content'][0]['text'].strip()
+                                
+                                # Parse multiple numbers from response
+                                selected_indices = []
+                                try:
+                                    # Extract all numbers from response
+                                    numbers = re.findall(r'\d+', answer)
+                                    for num_str in numbers:
+                                        choice_num = int(num_str)
+                                        if 1 <= choice_num <= len(q['options']):
+                                            selected_indices.append(choice_num - 1)
+                                except:
+                                    pass
+                                
+                                # Display options with ticks for selected answers
+                                st.markdown("**Options:**")
+                                for idx, opt in enumerate(q['options']):
+                                    if idx in selected_indices:
+                                        st.success(f"✅ {opt}")
+                                    else:
+                                        st.write(f"⚪ {opt}")
+                                
+                                if not selected_indices:
+                                    st.warning(f"⚠️ Could not parse LLM response: '{answer}'")
+                                else:
+                                    # Store multiple answers for form submission
+                                    if q.get('entry_id'):
+                                        # Google Forms expects multiple values for checkboxes
+                                        form_data[q['entry_id']] = [q['options'][i] for i in selected_indices]
+                            
+                            else:
+                                # Text/open-ended question - descriptive answer
+                                if q['type'] == 'text':
+                                    prompt = f"Question: {q['question']}\n\nProvide a brief, direct answer (1-2 sentences max)."
+                                    max_tokens = 100
+                                elif q['type'] == 'date':
+                                    prompt = f"Question: {q['question']}\n\nProvide a date in format: YYYY-MM-DD or MM/DD/YYYY."
+                                    max_tokens = 20
+                                else:
+                                    prompt = f"Question: {q['question']}\n\nProvide an appropriate answer."
+                                    max_tokens = 100
+                                
+                                body = json.dumps({
+                                    "anthropic_version": "bedrock-2023-05-31",
+                                    "max_tokens": max_tokens,
+                                    "temperature": 0.7,
                                     "messages": [{"role": "user", "content": prompt}]
                                 })
                                 
