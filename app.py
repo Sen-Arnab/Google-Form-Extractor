@@ -11,6 +11,15 @@ import os
 
 def detect_question_type(item):
     """Detect the type of question from the form item"""
+    # Check for grid questions (multiple radiogroups or groups)
+    radiogroups = item.find_all('div', {'role': 'radiogroup'})
+    groups = item.find_all('div', {'role': 'group'})
+    
+    if len(radiogroups) > 1:
+        return 'grid'
+    if len(groups) > 1:
+        return 'checkbox_grid'
+    
     # Check for radio buttons (single choice)
     if item.find('div', {'role': 'radio'}) or item.find('input', {'type': 'radio'}):
         return 'radio'
@@ -240,9 +249,30 @@ if extract_btn:
                                 q["entry_id"] = entry_name.split('_')[0] if '_' in entry_name else entry_name
                         
                         # Extract options only for choice-based questions
-                        if q_type in ['radio', 'checkbox', 'dropdown']:
+                        if q_type in ['radio', 'checkbox', 'dropdown', 'grid', 'checkbox_grid']:
+                            # For grid questions
+                            if q_type in ['grid', 'checkbox_grid']:
+                                # Extract row labels first
+                                rows = item.find_all('div', class_='wzWPxe')
+                                q["rows"] = []
+                                row_texts = set()
+                                for r in rows:
+                                    r_text = r.get_text(strip=True)
+                                    if r_text and r_text not in row_texts:
+                                        row_texts.add(r_text)
+                                        q["rows"].append(r_text)
+                                
+                                # Extract column headers (options) - filter out row labels
+                                headers = item.find_all('div', class_='V4d7Ke')
+                                seen_headers = set()
+                                for h in headers:
+                                    h_text = h.get_text(strip=True)
+                                    if h_text and h_text not in seen_headers and h_text not in row_texts:
+                                        seen_headers.add(h_text)
+                                        q["options"].append(h_text)
+                            
                             # For dropdown, extract from listbox
-                            if q_type == 'dropdown':
+                            elif q_type == 'dropdown':
                                 listbox = item.find('div', {'role': 'listbox'})
                                 if listbox:
                                     for opt in listbox.find_all('span', class_='vRMGwf'):
@@ -327,12 +357,105 @@ if extract_btn:
                                 'radio': '🔘',
                                 'checkbox': '☑️',
                                 'dropdown': '📋',
+                                'grid': '📊',
+                                'checkbox_grid': '☑️📊',
                                 'text': '✏️',
                                 'date': '📅'
                             }
-                            st.caption(f"{type_emoji.get(q['type'], '❓')} Type: {q['type'].title()}")
+                            st.caption(f"{type_emoji.get(q['type'], '❓')} Type: {q['type'].replace('_', ' ').title()}")
                             
-                            if q['options'] and q['type'] in ['radio', 'dropdown']:
+                            if q['type'] in ['grid', 'checkbox_grid'] and q.get('rows') and q.get('options'):
+                                # Grid question - answer each row
+                                grid_answers = {}
+                                
+                                for row in q['rows']:
+                                    options_list = '\n'.join([f"{i+1}. {opt}" for i, opt in enumerate(q['options'])])
+                                    
+                                    if q['type'] == 'grid':
+                                        # Single choice per row
+                                        prompt = f"""Question: {q['question']}
+
+For this row, pick the best matching option.
+
+Row: {row}
+
+Options:
+{options_list}
+
+Your answer (just the number):"""
+                                        
+                                        body = json.dumps({
+                                            "anthropic_version": "bedrock-2023-05-31",
+                                            "max_tokens": 3,
+                                            "temperature": 0.3,
+                                            "system": "Respond only with the option number.",
+                                            "messages": [{"role": "user", "content": prompt}]
+                                        })
+                                    else:
+                                        # Multiple choice per row (checkbox grid)
+                                        prompt = f"""Question: {q['question']}
+
+For this row, select all applicable options.
+
+Row: {row}
+
+Options:
+{options_list}
+
+Reply with comma-separated numbers (e.g., "1" or "1,2"):"""
+                                        
+                                        body = json.dumps({
+                                            "anthropic_version": "bedrock-2023-05-31",
+                                            "max_tokens": 20,
+                                            "temperature": 0.3,
+                                            "system": "You must respond only with comma-separated numbers. Pick at least one option.",
+                                            "messages": [{"role": "user", "content": prompt}]
+                                        })
+                                    
+                                    with st.spinner(f"🤖 Answering: {row[:30]}..."):
+                                        try:
+                                            response = bedrock.invoke_model(
+                                                modelId="eu.anthropic.claude-sonnet-4-20250514-v1:0",
+                                                body=body
+                                            )
+                                            result = json.loads(response['body'].read())
+                                            answer = result['content'][0]['text'].strip()
+                                            
+                                            # Parse answer
+                                            if q['type'] == 'grid':
+                                                match = re.search(r'\d+', answer)
+                                                if match:
+                                                    choice_num = int(match.group())
+                                                    if 1 <= choice_num <= len(q['options']):
+                                                        grid_answers[row] = [choice_num - 1]
+                                            else:
+                                                numbers = re.findall(r'\d+', answer)
+                                                selected = []
+                                                for num_str in numbers:
+                                                    choice_num = int(num_str)
+                                                    if 1 <= choice_num <= len(q['options']):
+                                                        selected.append(choice_num - 1)
+                                                if selected:
+                                                    grid_answers[row] = selected
+                                        except Exception as e:
+                                            st.error(f"Error for row '{row}': {str(e)}")
+                                
+                                # Display as table
+                                import pandas as pd
+                                table_data = []
+                                for row in q['rows']:
+                                    row_data = {'': row}
+                                    for col_idx, col in enumerate(q['options']):
+                                        if row in grid_answers and col_idx in grid_answers[row]:
+                                            row_data[col] = '✅'
+                                        else:
+                                            row_data[col] = ''
+                                    table_data.append(row_data)
+                                
+                                df = pd.DataFrame(table_data)
+                                st.dataframe(df, use_container_width=True, hide_index=True)
+                            
+                            elif q['options'] and q['type'] in ['radio', 'dropdown']:
                                 # Single choice question - return number
                                 options_list = '\n'.join([f"{i+1}. {opt}" for i, opt in enumerate(q['options'])])
                                 
