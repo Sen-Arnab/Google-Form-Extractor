@@ -1,7 +1,11 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 .env
 .DS_Store
 *.log
 .streamlit/
+credentials.json
+token.pickle
+.idea/

@@ -70,6 +70,13 @@ AWS_DEFAULT_REGION = "eu-north-1"
 - Only works with publicly accessible Google Forms
 - Forms requiring authentication won't be accessible
 - Uses AWS Bedrock with Claude Sonnet 4 in eu-north-1 region
+- **Auto-submit feature is experimental** and may not work for all forms due to Google's CSRF protection
+
+## Known Limitations
+
+- OAuth authentication for private forms is not fully functional
+- Form submission may fail due to Google's security measures
+- Complex form types (file upload, grid questions) are not supported
 
 ## Tech Stack
 
